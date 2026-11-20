@@ -41,12 +41,15 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        # --- Secret nội bộ (đặt TRƯỚC để che nguyên cụm) ---
+        "api_key": r"\bsk-[a-zA-Z0-9-]{6,}",
+        "password": r"\b(password|passwd|pwd|mật khẩu)\b\s*(is|là|[:=])\s*\S+",
+        "admin_password_value": r"\badmin123\b",
+        "internal_host": r"\b[\w.-]+\.internal(:\d+)?\b",
+        # --- PII khách hàng ---
+        "email": r"[\w.+-]+@[\w-]+(\.[\w-]+)+",
+        "vn_phone": r"(?<!\d)(\+84|0)[\s.-]?\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4}(?!\d)",
+        "national_id": r"(?<!\d)(\d{9}|\d{12})(?!\d)",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -172,16 +175,31 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        # 1. Regex: che PII / secret
+        result = content_filter(response_text)
+        if not result["safe"]:
+            self.redacted_count += 1
+            response_text = result["redacted"]
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=response_text)],
+            )
 
-        return llm_response  # TODO: modify if needed
+        # 2. (Optional) LLM-as-Judge — mặc định tắt
+        if self.use_llm_judge:
+            verdict = await llm_safety_check(response_text)
+            if not verdict["safe"]:
+                self.blocked_count += 1
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=(
+                        "I cannot share that information. "
+                        "How else can I help with your VinBank account?"
+                    ))],
+                )
+
+        # 3. Trả về response (đã sửa nếu cần)
+        return llm_response
 
 
 # ============================================================
